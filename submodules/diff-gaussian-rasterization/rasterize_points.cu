@@ -32,11 +32,12 @@ std::function<char*(size_t N)> resizeFunctional(torch::Tensor& t) {
     return lambda;
 }
 
-std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 RasterizeGaussiansCUDA(
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,
-    const torch::Tensor& colors,
+    const torch::Tensor& thermals,
+        const torch::Tensor& colors,
     const torch::Tensor& opacity,
 	const torch::Tensor& scales,
 	const torch::Tensor& rotations,
@@ -48,7 +49,8 @@ RasterizeGaussiansCUDA(
 	const float tan_fovy,
     const int image_height,
     const int image_width,
-	const torch::Tensor& sh,
+	const torch::Tensor& thermal_sh,
+	const torch::Tensor& color_sh,
 	const int degree,
 	const torch::Tensor& campos,
 	const bool prefiltered,
@@ -66,6 +68,7 @@ RasterizeGaussiansCUDA(
   auto float_opts = means3D.options().dtype(torch::kFloat32);
 
   torch::Tensor out_color = torch::full({NUM_CHANNELS, H, W}, 0.0, float_opts);
+  torch::Tensor out_thermal = torch::full({NUM_CHANNELS, H, W}, 0.0, float_opts);
   torch::Tensor radii = torch::full({P}, 0, means3D.options().dtype(torch::kInt32));
   
   torch::Device device(torch::kCUDA);
@@ -81,9 +84,9 @@ RasterizeGaussiansCUDA(
   if(P != 0)
   {
 	  int M = 0;
-	  if(sh.size(0) != 0)
+	  if(thermal_sh.size(0) != 0)
 	  {
-		M = sh.size(1);
+		M = thermal_sh.size(1);
       }
 
 	  rendered = CudaRasterizer::Rasterizer::forward(
@@ -94,8 +97,10 @@ RasterizeGaussiansCUDA(
 		background.contiguous().data<float>(),
 		W, H,
 		means3D.contiguous().data<float>(),
-		sh.contiguous().data_ptr<float>(),
-		colors.contiguous().data<float>(), 
+		thermal_sh.contiguous().data_ptr<float>(),
+		color_sh.contiguous().data_ptr<float>(),
+		thermals.contiguous().data<float>(), 
+		colors.contiguous().data<float>(),
 		opacity.contiguous().data<float>(), 
 		scales.contiguous().data_ptr<float>(),
 		scale_modifier,
@@ -107,18 +112,20 @@ RasterizeGaussiansCUDA(
 		tan_fovx,
 		tan_fovy,
 		prefiltered,
+		out_thermal.contiguous().data<float>(),
 		out_color.contiguous().data<float>(),
 		radii.contiguous().data<int>(),
 		debug);
   }
-  return std::make_tuple(rendered, out_color, radii, geomBuffer, binningBuffer, imgBuffer);
+  return std::make_tuple(rendered, out_thermal, out_color, radii, geomBuffer, binningBuffer, imgBuffer);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
  RasterizeGaussiansBackwardCUDA(
  	const torch::Tensor& background,
 	const torch::Tensor& means3D,
 	const torch::Tensor& radii,
+    const torch::Tensor& thermals,
     const torch::Tensor& colors,
 	const torch::Tensor& scales,
 	const torch::Tensor& rotations,
@@ -128,8 +135,10 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
     const torch::Tensor& projmatrix,
 	const float tan_fovx,
 	const float tan_fovy,
+    const torch::Tensor& dL_dout_thermal,
     const torch::Tensor& dL_dout_color,
-	const torch::Tensor& sh,
+	const torch::Tensor& thermal_sh,
+	const torch::Tensor& color_sh,
 	const int degree,
 	const torch::Tensor& campos,
 	const torch::Tensor& geomBuffer,
@@ -139,22 +148,28 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const bool debug) 
 {
   const int P = means3D.size(0);
-  const int H = dL_dout_color.size(1);
-  const int W = dL_dout_color.size(2);
+  const int H = dL_dout_thermal.size(1);
+  const int W = dL_dout_thermal.size(2);
   
   int M = 0;
-  if(sh.size(0) != 0)
+  
+  if(thermal_sh.size(0) != 0)
   {	
-	M = sh.size(1);
+	M = thermal_sh.size(1);
+	
   }
+
+
 
   torch::Tensor dL_dmeans3D = torch::zeros({P, 3}, means3D.options());
   torch::Tensor dL_dmeans2D = torch::zeros({P, 3}, means3D.options());
+  torch::Tensor dL_dthermals = torch::zeros({P, NUM_CHANNELS}, means3D.options());
   torch::Tensor dL_dcolors = torch::zeros({P, NUM_CHANNELS}, means3D.options());
   torch::Tensor dL_dconic = torch::zeros({P, 2, 2}, means3D.options());
   torch::Tensor dL_dopacity = torch::zeros({P, 1}, means3D.options());
   torch::Tensor dL_dcov3D = torch::zeros({P, 6}, means3D.options());
-  torch::Tensor dL_dsh = torch::zeros({P, M, 3}, means3D.options());
+  torch::Tensor dL_dthermal_sh = torch::zeros({P, M, 3}, means3D.options());
+  torch::Tensor dL_dcolor_sh = torch::zeros({P, M, 3}, means3D.options());
   torch::Tensor dL_dscales = torch::zeros({P, 3}, means3D.options());
   torch::Tensor dL_drotations = torch::zeros({P, 4}, means3D.options());
   
@@ -164,7 +179,9 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	  background.contiguous().data<float>(),
 	  W, H, 
 	  means3D.contiguous().data<float>(),
-	  sh.contiguous().data<float>(),
+	  thermal_sh.contiguous().data<float>(),
+	  color_sh.contiguous().data<float>(),
+	  thermals.contiguous().data<float>(),
 	  colors.contiguous().data<float>(),
 	  scales.data_ptr<float>(),
 	  scale_modifier,
@@ -179,20 +196,23 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	  reinterpret_cast<char*>(geomBuffer.contiguous().data_ptr()),
 	  reinterpret_cast<char*>(binningBuffer.contiguous().data_ptr()),
 	  reinterpret_cast<char*>(imageBuffer.contiguous().data_ptr()),
+	  dL_dout_thermal.contiguous().data<float>(),
 	  dL_dout_color.contiguous().data<float>(),
 	  dL_dmeans2D.contiguous().data<float>(),
 	  dL_dconic.contiguous().data<float>(),  
 	  dL_dopacity.contiguous().data<float>(),
+	  dL_dthermals.contiguous().data<float>(),
 	  dL_dcolors.contiguous().data<float>(),
 	  dL_dmeans3D.contiguous().data<float>(),
 	  dL_dcov3D.contiguous().data<float>(),
-	  dL_dsh.contiguous().data<float>(),
+	  dL_dthermal_sh.contiguous().data<float>(),
+	  dL_dcolor_sh.contiguous().data<float>(),
 	  dL_dscales.contiguous().data<float>(),
 	  dL_drotations.contiguous().data<float>(),
-	  debug);
+	  debug); 
   }
 
-  return std::make_tuple(dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dcov3D, dL_dsh, dL_dscales, dL_drotations);
+  return std::make_tuple(dL_dmeans2D, dL_dthermals, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dcov3D, dL_dthermal_sh, dL_dcolor_sh, dL_dscales, dL_drotations);
 }
 
 torch::Tensor markVisible(

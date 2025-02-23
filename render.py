@@ -10,7 +10,7 @@
 #
 
 import torch
-from scene import Scene_1, Scene_2
+from scene import Scene
 import os
 from tqdm import tqdm
 from os import makedirs
@@ -23,40 +23,44 @@ from gaussian_renderer import GaussianModel
 import time
 
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background):
-    render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
-    gts_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt")
 
-
-    makedirs(render_path, exist_ok=True)
-    makedirs(gts_path, exist_ok=True)
+    
+    render_color_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders_color")
+    gts_color_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt_color")
+    render_thermal_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders_thermal")
+    gts_thermal_path = os.path.join(model_path, name, "ours_{}".format(iteration), "gt_thermal")
+    makedirs(render_color_path, exist_ok=True)
+    makedirs(gts_color_path, exist_ok=True)
+    makedirs(render_thermal_path, exist_ok=True)
+    makedirs(gts_thermal_path, exist_ok=True)
 
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
+
+
+        image = render(view, gaussians, pipeline, background)["render_color"]
+        thermal = render(view, gaussians, pipeline, background)["render_thermal"]
+
+        gt_image = view.original_image.cuda()
+        gt_thermal = view.original_thermal.cuda()
+        torchvision.utils.save_image(image, os.path.join(render_color_path, '{0:05d}'.format(idx) + ".png"))
+        torchvision.utils.save_image(gt_image, os.path.join(gts_color_path, '{0:05d}'.format(idx) + ".png"))
+        torchvision.utils.save_image(thermal, os.path.join(render_thermal_path, '{0:05d}'.format(idx) + ".png"))
+        torchvision.utils.save_image(gt_thermal, os.path.join(gts_thermal_path, '{0:05d}'.format(idx) + ".png"))
         
-        rendering = render(view, gaussians, pipeline, background)["render"]
-
-        gt = view.original_image[0:3, :, :]
-        torchvision.utils.save_image(rendering, os.path.join(render_path, '{0:05d}'.format(idx) + ".png"))
-        torchvision.utils.save_image(gt, os.path.join(gts_path, '{0:05d}'.format(idx) + ".png"))
-
 
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool):
     with torch.no_grad():
-        gaussians_rgb = GaussianModel(dataset.sh_degree)
-        scene_rgb = Scene_1(dataset, gaussians_rgb, load_iteration=iteration, shuffle=False)
-        
-        gaussians_thermal = GaussianModel(dataset.sh_degree)
-        scene_thermal = Scene_2(dataset, gaussians_thermal, load_iteration=iteration, shuffle=False)
+        gaussians = GaussianModel(dataset.sh_degree)
+        scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
 
         bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         if not skip_train:
-            render_set(dataset.model_path, "rgb_train", scene_rgb.loaded_iter, scene_rgb.getTrainCameras(), gaussians_rgb, pipeline, background)
-            render_set(dataset.model_path, "thermal_train", scene_thermal.loaded_iter, scene_thermal.getTrainCameras(), gaussians_thermal, pipeline, background)
+             render_set(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background)
 
         if not skip_test:
-            render_set(dataset.model_path, "rgb_test", scene_rgb.loaded_iter, scene_rgb.getTestCameras(), gaussians_rgb, pipeline, background)
-            render_set(dataset.model_path, "thermal_test", scene_thermal.loaded_iter, scene_thermal.getTestCameras(), gaussians_thermal, pipeline, background)
+             render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background)
 
 if __name__ == "__main__":
     # Set up command line argument parser

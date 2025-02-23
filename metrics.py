@@ -21,17 +21,23 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser
 
-def readImages(renders_dir, gt_dir):
-    renders = []
-    gts = []
+def readImages(color_renders_dir, color_gt_dir, thermal_renders_dir, thermal_gt_dir):
+    color_renders = []
+    color_gts = []
+    thermal_renders = []
+    thermal_gts = []
     image_names = []
-    for fname in os.listdir(renders_dir):
-        render = Image.open(renders_dir / fname)
-        gt = Image.open(gt_dir / fname)
-        renders.append(tf.to_tensor(render).unsqueeze(0)[:, :3, :, :].cuda())
-        gts.append(tf.to_tensor(gt).unsqueeze(0)[:, :3, :, :].cuda())
+    for fname in os.listdir(color_renders_dir):
+        color_render = Image.open(color_renders_dir / fname)
+        color_gt = Image.open(color_gt_dir / fname)
+        thermal_render = Image.open(thermal_renders_dir / fname)
+        thermal_gt = Image.open(thermal_gt_dir / fname)
+        color_renders.append(tf.to_tensor(color_render).unsqueeze(0)[:, :3, :, :].cuda())
+        color_gts.append(tf.to_tensor(color_gt).unsqueeze(0)[:, :3, :, :].cuda())
+        thermal_renders.append(tf.to_tensor(thermal_render).unsqueeze(0)[:, :3, :, :].cuda())
+        thermal_gts.append(tf.to_tensor(thermal_gt).unsqueeze(0)[:, :3, :, :].cuda())
         image_names.append(fname)
-    return renders, gts, image_names
+    return color_renders, color_gts, thermal_renders, thermal_gts, image_names
 
 def evaluate(model_paths):
 
@@ -49,10 +55,9 @@ def evaluate(model_paths):
             full_dict_polytopeonly[scene_dir] = {}
             per_view_dict_polytopeonly[scene_dir] = {}
 
-            color_test_dir = Path(scene_dir) / "rgb_test"
-            thermal_test_dir = Path(scene_dir) / "thermal_test"
+            test_dir = Path(scene_dir) / "test"
 
-            for method in os.listdir(color_test_dir):
+            for method in os.listdir(test_dir):
                 print("Method:", method)
 
                 full_dict[scene_dir][method] = {}
@@ -60,75 +65,53 @@ def evaluate(model_paths):
                 full_dict_polytopeonly[scene_dir][method] = {}
                 per_view_dict_polytopeonly[scene_dir][method] = {}
 
-                method_dir = color_test_dir / method 
-
-                print("method_dir is :", method_dir)
-
-                color_gt_dir = method_dir/ "gt"
-                color_renders_dir = method_dir / "renders"
-                color_renders, color_gts, image_names = readImages(color_renders_dir, color_gt_dir)
+                method_dir = test_dir / method
+                color_gt_dir = method_dir/ "gt_color"
+                color_renders_dir = method_dir / "renders_color"
+                thermal_gt_dir = method_dir/ "gt_thermal"
+                thermal_renders_dir = method_dir / "renders_thermal"
+                color_renders, color_gts, thermal_renders, thermal_gts, image_names = readImages(color_renders_dir, color_gt_dir, thermal_renders_dir, thermal_gt_dir)
 
                 color_ssims = []
                 color_psnrs = []
                 color_lpipss = []
-
-                for idx in tqdm(range(len(color_renders)), desc="Metric evaluation progress"):
-                    color_ssims.append(ssim(color_renders[idx], color_gts[idx]))
-                    color_psnrs.append(psnr(color_renders[idx], color_gts[idx]))
-                    color_lpipss.append(lpips(color_renders[idx], color_gts[idx], net_type='vgg'))
-
-                print(" color SSIM : {:>12.7f}".format(torch.tensor(color_ssims).mean(), ".5"))
-                print(" color PSNR : {:>12.7f}".format(torch.tensor(color_psnrs).mean(), ".5"))
-                print(" color LPIPS: {:>12.7f}".format(torch.tensor(color_lpipss).mean(), ".5"))
-
-                print("")
-
-                full_dict[scene_dir][method].update({"color SSIM": torch.tensor(color_ssims).mean().item(),
-                                                        "color PSNR": torch.tensor(color_psnrs).mean().item(),
-                                                        "color LPIPS": torch.tensor(color_lpipss).mean().item()
-                                                        })
-                per_view_dict[scene_dir][method].update({"color SSIM": {name: ssim for ssim, name in zip(torch.tensor(color_ssims).tolist(), image_names)},
-                                                            "color PSNR": {name: psnr for psnr, name in zip(torch.tensor(color_psnrs).tolist(), image_names)},
-                                                            "color LPIPS": {name: lp for lp, name in zip(torch.tensor(color_lpipss).tolist(), image_names)}
-                                                            })
-                
-            for method in os.listdir(thermal_test_dir):
-                print("Method:", method)
-
-                method_dir =thermal_test_dir / method 
-
-                print("method_dir is :", method_dir)
-
-                thermal_gt_dir = method_dir/ "gt"
-                thermal_renders_dir = method_dir / "renders"
-                thermal_renders, thermal_gts, image_names = readImages(thermal_renders_dir, thermal_gt_dir)
-
                 thermal_ssims = []
                 thermal_psnrs = []
                 thermal_lpipss = []
 
                 for idx in tqdm(range(len(color_renders)), desc="Metric evaluation progress"):
-
+                    color_ssims.append(ssim(color_renders[idx], color_gts[idx]))
+                    color_psnrs.append(psnr(color_renders[idx], color_gts[idx]))
+                    color_lpipss.append(lpips(color_renders[idx], color_gts[idx], net_type='vgg'))
                     thermal_ssims.append(ssim(thermal_renders[idx], thermal_gts[idx]))
                     thermal_psnrs.append(psnr(thermal_renders[idx], thermal_gts[idx]))
                     thermal_lpipss.append(lpips(thermal_renders[idx], thermal_gts[idx], net_type='vgg'))
 
-                print(" thermal SSIM : {:>12.7f}".format(torch.tensor(thermal_ssims).mean(), ".5"))
-                print(" thermal PSNR : {:>12.7f}".format(torch.tensor(thermal_psnrs).mean(), ".5"))
-                print(" thermal LPIPS: {:>12.7f}".format(torch.tensor(thermal_lpipss).mean(), ".5"))
+                print("  color_SSIM : {:>12.7f}".format(torch.tensor(color_ssims).mean(), ".5"))
+                print("  color_PSNR : {:>12.7f}".format(torch.tensor(color_psnrs).mean(), ".5"))
+                print("  color_LPIPS: {:>12.7f}".format(torch.tensor(color_lpipss).mean(), ".5"))
+                
+                print("  thermal_SSIM : {:>12.7f}".format(torch.tensor(thermal_ssims).mean(), ".5"))
+                print("  thermal_PSNR : {:>12.7f}".format(torch.tensor(thermal_psnrs).mean(), ".5"))
+                print("  thermal_LPIPS: {:>12.7f}".format(torch.tensor(thermal_lpipss).mean(), ".5"))
 
                 print("")
 
-                full_dict[scene_dir][method].update({"thermal SSIM": torch.tensor(thermal_ssims).mean().item(),
-                                                        "thermal PSNR": torch.tensor(thermal_psnrs).mean().item(),
-                                                        "thermal LPIPS": torch.tensor(thermal_lpipss).mean().item()
+                full_dict[scene_dir][method].update({"color_SSIM": torch.tensor(color_ssims).mean().item(),
+                                                        "color_PSNR": torch.tensor(color_psnrs).mean().item(),
+                                                        "color_LPIPS": torch.tensor(color_lpipss).mean().item(),
+                                                        "thermal_SSIM": torch.tensor(thermal_ssims).mean().item(),
+                                                        "thermal_PSNR": torch.tensor(thermal_psnrs).mean().item(),
+                                                        "thermal_LPIPS": torch.tensor(thermal_lpipss).mean().item()
                                                         })
-                per_view_dict[scene_dir][method].update({"thermal SSIM": {name: ssim for ssim, name in zip(torch.tensor(thermal_ssims).tolist(), image_names)},
-                                                            "thermal PSNR": {name: psnr for psnr, name in zip(torch.tensor(thermal_psnrs).tolist(), image_names)},
-                                                            "thermal LPIPS": {name: lp for lp, name in zip(torch.tensor(thermal_lpipss).tolist(), image_names)},
-                                                            })
                 
-            
+                per_view_dict[scene_dir][method].update({"color_SSIM": {name: ssim for ssim, name in zip(torch.tensor(color_ssims).tolist(), image_names)},
+                                                            "color_PSNR": {name: psnr for psnr, name in zip(torch.tensor(color_psnrs).tolist(), image_names)},
+                                                            "color_LPIPS": {name: lp for lp, name in zip(torch.tensor(color_lpipss).tolist(), image_names)},
+                                                            "thermal_SSIM": {name: ssim for ssim, name in zip(torch.tensor(thermal_ssims).tolist(), image_names)},
+                                                            "thermal_PSNR": {name: psnr for psnr, name in zip(torch.tensor(thermal_psnrs).tolist(), image_names)},
+                                                            "thermal_LPIPS": {name: lp for lp, name in zip(torch.tensor(thermal_lpipss).tolist(), image_names)}}
+                                                            )
 
             with open(scene_dir + "/results.json", 'w') as fp:
                 json.dump(full_dict[scene_dir], fp, indent=True)

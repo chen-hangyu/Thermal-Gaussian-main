@@ -156,12 +156,14 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 {
 	GeometryState geom;
 	obtain(chunk, geom.depths, P, 128);
-	obtain(chunk, geom.clamped, P * 3, 128);
+	obtain(chunk, geom.clamped_thermal, P * 3, 128);
+	obtain(chunk, geom.clamped_color, P * 3, 128);
 	obtain(chunk, geom.internal_radii, P, 128);
 	obtain(chunk, geom.means2D, P, 128);
 	obtain(chunk, geom.cov3D, P * 6, 128);
 	obtain(chunk, geom.conic_opacity, P, 128);
-	obtain(chunk, geom.rgb, P * 3, 128);
+	obtain(chunk, geom.rgb_thermal, P * 3, 128);
+	obtain(chunk, geom.rgb_color, P * 3, 128);
 	obtain(chunk, geom.tiles_touched, P, 128);
 	cub::DeviceScan::InclusiveSum(nullptr, geom.scan_size, geom.tiles_touched, geom.tiles_touched, P);
 	obtain(chunk, geom.scanning_space, geom.scan_size, 128);
@@ -203,7 +205,9 @@ int CudaRasterizer::Rasterizer::forward(
 	const float* background,
 	const int width, int height,
 	const float* means3D,
-	const float* shs,
+	const float* thermal_shs,
+	const float* color_shs,
+	const float* thermals_precomp,
 	const float* colors_precomp,
 	const float* opacities,
 	const float* scales,
@@ -215,6 +219,7 @@ int CudaRasterizer::Rasterizer::forward(
 	const float* cam_pos,
 	const float tan_fovx, float tan_fovy,
 	const bool prefiltered,
+	float* out_thermal,
 	float* out_color,
 	int* radii,
 	bool debug)
@@ -239,6 +244,11 @@ int CudaRasterizer::Rasterizer::forward(
 	char* img_chunkptr = imageBuffer(img_chunk_size);
 	ImageState imgState = ImageState::fromChunk(img_chunkptr, width * height);
 
+	if (NUM_CHANNELS != 3 && thermals_precomp == nullptr)
+	{
+		throw std::runtime_error("For non-RGB, provide precomputed Gaussian colors!");
+	}
+
 	if (NUM_CHANNELS != 3 && colors_precomp == nullptr)
 	{
 		throw std::runtime_error("For non-RGB, provide precomputed Gaussian colors!");
@@ -252,9 +262,12 @@ int CudaRasterizer::Rasterizer::forward(
 		scale_modifier,
 		(glm::vec4*)rotations,
 		opacities,
-		shs,
-		geomState.clamped,
+		thermal_shs,
+		color_shs,
+		geomState.clamped_thermal,
+		geomState.clamped_color,
 		cov3D_precomp,
+		thermals_precomp,
 		colors_precomp,
 		viewmatrix, projmatrix,
 		(glm::vec3*)cam_pos,
@@ -265,7 +278,8 @@ int CudaRasterizer::Rasterizer::forward(
 		geomState.means2D,
 		geomState.depths,
 		geomState.cov3D,
-		geomState.rgb,
+		geomState.rgb_thermal,
+		geomState.rgb_color,
 		geomState.conic_opacity,
 		tile_grid,
 		geomState.tiles_touched,
@@ -318,19 +332,23 @@ int CudaRasterizer::Rasterizer::forward(
 	CHECK_CUDA(, debug)
 
 	// Let each tile blend its range of Gaussians independently in parallel
-	const float* feature_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb;
+	// todo 可能需要改得地方
+	const float* thermal_ptr = thermals_precomp != nullptr ? thermals_precomp : geomState.rgb_thermal;
+	const float* feature_ptr = colors_precomp != nullptr ? colors_precomp : geomState.rgb_color;
 	CHECK_CUDA(FORWARD::render(
 		tile_grid, block,
 		imgState.ranges,
 		binningState.point_list,
 		width, height,
 		geomState.means2D,
+		thermal_ptr,
 		feature_ptr,
 		geomState.conic_opacity,
 		imgState.accum_alpha,
 		imgState.n_contrib,
 		background,
-		out_color), debug)
+		out_color,
+		out_thermal), debug)
 
 	return num_rendered;
 }
@@ -342,7 +360,9 @@ void CudaRasterizer::Rasterizer::backward(
 	const float* background,
 	const int width, int height,
 	const float* means3D,
-	const float* shs,
+	const float* thermal_shs,
+	const float* color_shs,
+	const float* thermals_precomp,
 	const float* colors_precomp,
 	const float* scales,
 	const float scale_modifier,
@@ -356,14 +376,17 @@ void CudaRasterizer::Rasterizer::backward(
 	char* geom_buffer,
 	char* binning_buffer,
 	char* img_buffer,
-	const float* dL_dpix,
+	const float* dL_dpix_thermal,
+	const float* dL_dpix_color,
 	float* dL_dmean2D,
 	float* dL_dconic,
 	float* dL_dopacity,
+	float* dL_dthermal,
 	float* dL_dcolor,
 	float* dL_dmean3D,
 	float* dL_dcov3D,
-	float* dL_dsh,
+	float* dL_dthermal_sh,
+	float* dL_dcolor_sh,
 	float* dL_dscale,
 	float* dL_drot,
 	bool debug)
@@ -386,7 +409,8 @@ void CudaRasterizer::Rasterizer::backward(
 	// Compute loss gradients w.r.t. 2D mean position, conic matrix,
 	// opacity and RGB of Gaussians from per-pixel loss gradients.
 	// If we were given precomputed colors and not SHs, use them.
-	const float* color_ptr = (colors_precomp != nullptr) ? colors_precomp : geomState.rgb;
+	const float* thermal_ptr = (thermals_precomp != nullptr) ? thermals_precomp : geomState.rgb_thermal;
+	const float* color_ptr = (colors_precomp != nullptr) ? colors_precomp : geomState.rgb_color;
 	CHECK_CUDA(BACKWARD::render(
 		tile_grid,
 		block,
@@ -396,14 +420,17 @@ void CudaRasterizer::Rasterizer::backward(
 		background,
 		geomState.means2D,
 		geomState.conic_opacity,
+		thermal_ptr,
 		color_ptr,
 		imgState.accum_alpha,
 		imgState.n_contrib,
-		dL_dpix,
+		dL_dpix_thermal,
+		dL_dpix_color,
 		(float3*)dL_dmean2D,
 		(float4*)dL_dconic,
 		dL_dopacity,
-		dL_dcolor), debug)
+		dL_dcolor,
+		dL_dthermal), debug)
 
 	// Take care of the rest of preprocessing. Was the precomputed covariance
 	// given to us or a scales/rot pair? If precomputed, pass that. If not,
@@ -412,8 +439,10 @@ void CudaRasterizer::Rasterizer::backward(
 	CHECK_CUDA(BACKWARD::preprocess(P, D, M,
 		(float3*)means3D,
 		radii,
-		shs,
-		geomState.clamped,
+		thermal_shs,
+		color_shs,
+		geomState.clamped_thermal,
+		geomState.clamped_color,
 		(glm::vec3*)scales,
 		(glm::vec4*)rotations,
 		scale_modifier,
@@ -426,9 +455,11 @@ void CudaRasterizer::Rasterizer::backward(
 		(float3*)dL_dmean2D,
 		dL_dconic,
 		(glm::vec3*)dL_dmean3D,
+		dL_dthermal,
 		dL_dcolor,
 		dL_dcov3D,
-		dL_dsh,
+		dL_dthermal_sh,
+		dL_dcolor_sh,
 		(glm::vec3*)dL_dscale,
 		(glm::vec4*)dL_drot), debug)
 }

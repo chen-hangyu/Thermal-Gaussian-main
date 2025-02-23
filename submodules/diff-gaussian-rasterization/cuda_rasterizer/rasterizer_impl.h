@@ -31,12 +31,14 @@ namespace CudaRasterizer
 		size_t scan_size;
 		float* depths;
 		char* scanning_space;
-		bool* clamped;
+		bool* clamped_thermal;
+		bool* clamped_color;
 		int* internal_radii;
 		float2* means2D;
 		float* cov3D;
 		float4* conic_opacity;
-		float* rgb;
+		float* rgb_thermal;
+		float* rgb_color;
 		uint32_t* point_offsets;
 		uint32_t* tiles_touched;
 

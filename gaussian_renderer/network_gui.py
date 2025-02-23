@@ -47,12 +47,15 @@ def read():
     message = conn.recv(messageLength)
     return json.loads(message.decode("utf-8"))
 
-def send(message_bytes, verify):
+def send(message_bytes_list, verify):
     global conn
-    if message_bytes != None:
-        conn.sendall(message_bytes)
+    for message_bytes in message_bytes_list:
+        if message_bytes is not None:
+            conn.sendall(len(message_bytes).to_bytes(4, 'little'))
+            conn.sendall(message_bytes)
     conn.sendall(len(verify).to_bytes(4, 'little'))
     conn.sendall(bytes(verify, 'ascii'))
+
 
 def receive():
     message = read()

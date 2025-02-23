@@ -27,9 +27,12 @@ namespace FORWARD
 		const float scale_modifier,
 		const glm::vec4* rotations,
 		const float* opacities,
-		const float* shs,
-		bool* clamped,
+		const float* thermal_shs,
+		const float* color_shs,
+		bool* clamped_thermal,
+		bool* clamped_color,
 		const float* cov3D_precomp,
+		const float* thermals_precomp,
 		const float* colors_precomp,
 		const float* viewmatrix,
 		const float* projmatrix,
@@ -41,6 +44,7 @@ namespace FORWARD
 		float2* points_xy_image,
 		float* depths,
 		float* cov3Ds,
+		float* thermals,
 		float* colors,
 		float4* conic_opacity,
 		const dim3 grid,
@@ -54,12 +58,14 @@ namespace FORWARD
 		const uint32_t* point_list,
 		int W, int H,
 		const float2* points_xy_image,
-		const float* features,
+		const float* thermal_features,
+		const float* color_features,
 		const float4* conic_opacity,
 		float* final_T,
 		uint32_t* n_contrib,
 		const float* bg_color,
-		float* out_color);
+		float* out_color,
+		float* out_thermal);
 }
 
 

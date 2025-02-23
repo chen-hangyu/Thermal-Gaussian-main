@@ -65,6 +65,9 @@ def _ssim(img1, img2, window, window_size, channel, size_average=True):
     else:
         return ssim_map.mean(1).mean(1).mean(1)
 
+
+
+
 def generate_adj_neighbors(image_map, k):
     C, H, W = image_map.shape
     adj = torch.zeros((C, H, W, k)).cuda()
@@ -97,17 +100,17 @@ def generate_adj_neighbors(image_map, k):
 
 def smoothness_loss(image_map):
     C, H, W = image_map.shape
-    adj = generate_adj_neighbors(image_map,4)
-
+    adj = generate_adj_neighbors(image_map,4)    #4 or 8
     K = adj.shape[-1]
-    
 
     loss = 0.0
     for i in range(K):
         neighbor_image = adj[..., i]
         diff = image_map - neighbor_image
+
         loss += torch.sum(torch.abs(diff))
     
     loss /= (C * H * W )
     
     return loss
+

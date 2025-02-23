@@ -50,10 +50,11 @@ class ModelParams(ParamGroup):
         self._source_path = ""
         self._model_path = ""
         self._images = "images"
+        self._thermal = "thermal"
         self._resolution = -1
         self._white_background = False
         self.data_device = "cuda"
-        self.eval = True
+        self.eval = False
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -76,6 +77,7 @@ class OptimizationParams(ParamGroup):
         self.position_lr_delay_mult = 0.01
         self.position_lr_max_steps = 30_000
         self.feature_lr = 0.0025
+        self.thermal_feature_lr = 0.0025
         self.opacity_lr = 0.05
         self.scaling_lr = 0.005
         self.rotation_lr = 0.001
