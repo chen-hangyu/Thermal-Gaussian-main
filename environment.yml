@@ -1,4 +1,4 @@
-name: gaussian_splatting_2sh
+name: thermal_gaussian
 channels:
   - pytorch
   - conda-forge
