@@ -10,7 +10,7 @@ The environment required for OMMG is the same as in the main branch, except for 
 Since we modified the diff-gaussian-rasterization, you need to reinstall the subdependency, As follow:
 
 ```
-conda activate thermal_gaussian     #Suppose you have successfully configured the environment with the main branch
+conda activate thermal_gaussian     #If you have successfully configured the environment with the main branch
 pip install submodules/diff-gaussian-rasterization.
 ```
 
